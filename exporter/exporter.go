@@ -76,7 +76,9 @@ type Opts struct {
 	IndexStatsCollections []string
 	Logger                *logrus.Logger
 
-	URI string
+	IsSRV     bool
+	OriginURI string
+	URI       string
 }
 
 var (
@@ -265,6 +267,14 @@ func (e *Exporter) getClient(ctx context.Context) (*mongo.Client, error) {
 	}
 
 	return client, nil
+}
+
+func (e *Exporter) SetURI(uri string) {
+	e.opts.URI = uri
+}
+
+func (e *Exporter) GetOpts() *Opts {
+	return e.opts
 }
 
 // Handler returns an http.Handler that serves metrics. Can be used instead of

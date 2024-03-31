@@ -16,6 +16,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
@@ -48,6 +49,7 @@ type GlobalFlags struct {
 	TimeoutOffset         int      `name:"web.timeout-offset" help:"Offset to subtract from the request timeout in seconds" default:"1"`
 	LogLevel              string   `name:"log.level" help:"Only log messages with the given severity or above. Valid levels: [debug, info, warn, error, fatal]" enum:"debug,info,warn,error,fatal" default:"error"`
 	ConnectTimeoutMS      int      `name:"mongodb.connect-timeout-ms" help:"Connection timeout in milliseconds" default:"5000"`
+	SrvUpdateInterval     int      `name:"mongodb.srv-update-interval" help:"Interval in seconds to update SRV records" default:"300"`
 
 	EnableDiagnosticData     bool `name:"collector.diagnosticdata" help:"Enable collecting metrics from getDiagnosticData"`
 	EnableReplicasetStatus   bool `name:"collector.replicasetstatus" help:"Enable collecting metrics from replSetGetStatus"`
@@ -128,12 +130,23 @@ func main() {
 		WebListenAddress: opts.WebListenAddress,
 		TLSConfigPath:    opts.TLSConfigPath,
 	}
-	exporter.RunWebServer(serverOpts, buildServers(opts, log), log)
+
+	runCtx := context.Background()
+	exporters := buildServers(opts, log)
+	go exporter.SeedListUpdater(runCtx, exporters, opts.SrvUpdateInterval, log)
+	exporter.RunWebServer(serverOpts, exporters, log)
+	runCtx.Done()
 }
 
 func buildExporter(opts GlobalFlags, uri string, log *logrus.Logger) *exporter.Exporter {
 	uri = buildURI(uri, opts.User, opts.Password)
+	originURI := uri
 	log.Debugf("Connection URI: %s", uri)
+
+	isSRV := (uri[:14] == "mongodb+srv://")
+	if isSRV {
+		uri = exporter.GetSeedListFromSRV(uri, log)
+	}
 
 	exporterOpts := &exporter.Opts{
 		CollStatsNamespaces:   strings.Split(opts.CollStatsNamespaces, ","),
@@ -141,7 +154,6 @@ func buildExporter(opts GlobalFlags, uri string, log *logrus.Logger) *exporter.E
 		DiscoveringMode:       opts.DiscoveringMode,
 		IndexStatsCollections: strings.Split(opts.IndexStatsCollections, ","),
 		Logger:                log,
-		URI:                   uri,
 		GlobalConnPool:        opts.GlobalConnPool,
 		DirectConnect:         opts.DirectConnect,
 		ConnectTimeoutMS:      opts.ConnectTimeoutMS,
@@ -164,6 +176,10 @@ func buildExporter(opts GlobalFlags, uri string, log *logrus.Logger) *exporter.E
 		CollectAll:        opts.CollectAll,
 		ProfileTimeTS:     opts.ProfileTimeTS,
 		CurrentOpSlowTime: opts.CurrentOpSlowTime,
+
+		IsSRV:     isSRV,
+		OriginURI: originURI,
+		URI:       uri,
 	}
 
 	e := exporter.New(exporterOpts)
